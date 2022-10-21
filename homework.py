@@ -49,7 +49,7 @@ def get_api_answer(current_timestamp):
     except Exception as error:
         raise exceptions.YPConnectApiError(
             f'Произошел сбой при подключении к API Yandex Practicum; '
-            f'описание ошибки: {error}')
+            f'Описание ошибки: {error}')
     else:
         if response.status_code != HTTPStatus.OK:
             raise ConnectionError(
