@@ -1,32 +1,22 @@
-class HTTPStatusOKException(Exception):
-    """Server is unavailable."""
-
-    pass
+class SendMessageError(Exception):
+    """Error on send message to Telegram API."""
 
 
-class WrongTypeOfHomeworksKey(Exception):
-    """Wrong type of homeworks key."""
+class YPConnectApiError(Exception):
+    """Error on connect to yandex practicum API."""
+
+
+class EnvVarsNotFoundException(Exception):
+    """Environment variable is not found."""
 
 
 class UnknownHomeWorkStatus(Exception):
     """Unknown homework status."""
 
-    pass
-
-
-class HomeworksKeyIsNotExists(Exception):
-    """Homeworks key is not exists."""
-
-    pass
-
 
 class EmptyHomeworkInResponse(Exception):
     """Empty homework in response."""
 
-    pass
-
 
 class NoHomeworkNameInResponse(Exception):
     """Homework name is empty in response."""
-
-    pass

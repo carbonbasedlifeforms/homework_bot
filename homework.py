@@ -21,60 +21,59 @@ ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
 
-HOMEWORK_STATUSES = {
+HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
-
-logging.basicConfig(
-    handlers=[logging.StreamHandler()],
-    format='%(asctime)s [%(levelname)s] %(message)s; %(funcName)s; %(lineno)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
 
 def send_message(bot, message):
     """Отправка сообщения в Telegram."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.info('Сообщение отправлено в Telegram')
     except Exception as error:
-        logger.error(f'Возникла ошибка при отправке сообщения: {error}')
+        raise exceptions.SendMessageError(
+            f'Возникла ошибка при отправке сообщения; '
+            f'id чата:{TELEGRAM_CHAT_ID} , текст ошибки: {error}'
+        )
+    else:
+        logging.info('Сообщение отправлено в Telegram')
 
 
 def get_api_answer(current_timestamp):
     """Отправка запроса к API Yandex Practicum."""
-    timestamp = current_timestamp or int(time.time())
-    params = {'from_date': timestamp}
-    response = requests.get(ENDPOINT, headers=HEADERS, params=params)
-    if response.status_code != HTTPStatus.OK:
-        err_message = (
-            f'Неуспешный запрос к API Yandex Practicum'
-            f'код ответа сервера: {response.status_code}'
-        )
-        logger.error(err_message)
-        raise exceptions.HTTPStatusOKException(err_message)
-    return response.json()
+    params = {'from_date': current_timestamp}
+    try:
+        response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    except Exception as error:
+        raise exceptions.YPConnectApiError(
+            f'Произошел сбой при подключении к API Yandex Practicum; '
+            f'описание ошибки: {error}')
+    else:
+        if response.status_code != HTTPStatus.OK:
+            raise ConnectionError(
+                f'Неуспешный запрос к API Yandex Practicum '
+                f'код ответа сервера: {response.status_code}'
+            )
+        return response.json()
 
 
 def check_response(response):
     """Проверка ответа API на корректность."""
-    if response['homeworks'] is None:
-        err_message = 'Отсутствует ключ homeworks в ответе от API'
-        logger.error(err_message)
-        raise exceptions.HomeworksKeyIsNotExists(err_message)
-    if ['homeworks'][0] not in response:
+    if not isinstance(response, dict):
+        raise TypeError('Ответ API не является словарем')
+    if 'homeworks' not in response:
+        raise KeyError('ключ homeworks отсутствует в ответе от API')
+    if ['homeworks'][0] == []:
         err_message = 'Нет домашки в респонсе'
-        logger.error(err_message)
+        logging.error(err_message)
         raise exceptions.EmptyHomeworkInResponse(err_message)
     homeworks = response['homeworks']
-    if isinstance(homeworks, list):
-        return homeworks
-    else:
-        err_message = 'Не верный тип ключа homeworks'
-        raise exceptions.WrongTypeOfHomeworksKey(err_message)
+    if not isinstance(homeworks, list):
+        wrongtype = type(homeworks)
+        raise TypeError(f'Не верный тип ключа homeworks:{wrongtype}')
+    return homeworks
 
 
 def parse_status(homework):
@@ -82,42 +81,39 @@ def parse_status(homework):
     homework_name = homework['homework_name']
     if homework_name is None:
         err_message = 'Пустое значение в имени домашки'
-        logger.error(err_message)
+        logging.error(err_message)
         raise exceptions.NoHomeworkNameInResponse(err_message)
     homework_status = homework['status']
-    if homework_status not in HOMEWORK_STATUSES:
+    if homework_status not in HOMEWORK_VERDICTS:
         err_message = f'Неизвестный статус домашки: {homework_status}'
-        logger.error(err_message)
+        logging.error(err_message)
         raise exceptions.UnknownHomeWorkStatus(err_message)
-    verdict = HOMEWORK_STATUSES[homework_status]
+    verdict = HOMEWORK_VERDICTS[homework_status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def check_tokens():
     """Проверка переменных окружения."""
-    tokens = [
-        ('PRACTICUM_TOKEN', PRACTICUM_TOKEN),
-        ('TELEGRAM_TOKEN', TELEGRAM_TOKEN),
-        ('TELEGRAM_CHAT_ID', TELEGRAM_CHAT_ID),
-    ]
-    for name, value in tokens:
-        trigger = True
-        if value is None:
-            trigger = False
-            logger.critical(
-                f'Проверьте что переменная окружения: {name} определена'
+    result = True
+    for token in ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'):
+        if globals()[token] is None:
+            result = False
+            logging.critical(
+                f'Не обнаружена переменная окружения {token}'
             )
-        return trigger
+    return result
 
 
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
-        sys.exit()
+        raise SystemExit(
+            'Программа завершена, отсутствует одна или более '
+            'переменных окружения'
+        )
     bot = Bot(token=str(TELEGRAM_TOKEN))
-    current_timestamp = int(time.time())
-    last_hw_status = 'reviewing'
-    first_error_send = True
+    current_timestamp = 0
+    last_hw_status = None
     while True:
         try:
             response = get_api_answer(current_timestamp)
@@ -129,19 +125,35 @@ def main():
                     send_message(bot, message)
                     last_hw_status = homework['status']
                 else:
-                    logger.info("Статус домашего задания не изменился")
+                    logging.info("Статус домашего задания не изменился")
             else:
-                logger.info("Домашнее задание не найдено")
-            current_timestamp = int(time.time())
-            time.sleep(RETRY_TIME)
+                logging.info("Домашнее задание не найдено")
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            logger.error(message)
-            if first_error_send:
-                first_error_send = False
-                send_message(bot, message)
+            logging.error(message)
+            send_message(bot, message)
+        finally:
             time.sleep(RETRY_TIME)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        format=(
+            '%(asctime)s '
+            '[%(levelname)s] '
+            '%(message)s; '
+            '%(funcName)s; '
+            '%(lineno)s'
+        ),
+        level=logging.INFO,
+        handlers=[
+            logging.StreamHandler(stream=sys.stdout),
+            logging.FileHandler(
+                filename=f'{__file__}.log',
+                mode='w',
+                encoding='utf-8'
+            )
+        ],
+
+    )
     main()
