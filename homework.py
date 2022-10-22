@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 import time
@@ -15,6 +16,12 @@ load_dotenv()
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+ENV_VARS = (
+    'PRACTICUM_TOKEN',
+    'TELEGRAM_TOKEN',
+    'TELEGRAM_CHAT_ID'
+)
 
 RETRY_TIME = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
@@ -47,9 +54,13 @@ def get_api_answer(current_timestamp):
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
     except Exception as error:
-        raise exceptions.YPConnectApiError(
-            f'Произошел сбой при подключении к API Yandex Practicum; '
-            f'Описание ошибки: {error}')
+        raise ConnectionError(
+            f'Произошел сбой при подключении к API Yandex Practicum '
+            f'с параметрами: '
+            f'ENDPOINT: {ENDPOINT}; '
+            f'HEADERS: {HEADERS}; '
+            f'params: {params}); '
+            f'Полученный текст ошибки: {error}')
     else:
         if response.status_code != HTTPStatus.OK:
             raise ConnectionError(
@@ -65,10 +76,6 @@ def check_response(response):
         raise TypeError('Ответ API не является словарем')
     if 'homeworks' not in response:
         raise KeyError('ключ homeworks отсутствует в ответе от API')
-    if ['homeworks'][0] == []:
-        err_message = 'Нет домашки в респонсе'
-        logging.error(err_message)
-        raise exceptions.EmptyHomeworkInResponse(err_message)
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         wrongtype = type(homeworks)
@@ -95,7 +102,7 @@ def parse_status(homework):
 def check_tokens():
     """Проверка переменных окружения."""
     result = True
-    for token in ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'):
+    for token in ENV_VARS:
         if globals()[token] is None:
             result = False
             logging.critical(
@@ -114,24 +121,27 @@ def main():
     bot = Bot(token=str(TELEGRAM_TOKEN))
     current_timestamp = 0
     last_hw_status = None
+    last_err_message = None
     while True:
         try:
             response = get_api_answer(current_timestamp)
             homeworks = check_response(response)
-            if homeworks:
-                homework = homeworks[0]
-                if homework['status'] != last_hw_status:
-                    message = parse_status(homework)
-                    send_message(bot, message)
-                    last_hw_status = homework['status']
-                else:
-                    logging.info("Статус домашего задания не изменился")
-            else:
+            if not homeworks:
                 logging.info("Домашнее задание не найдено")
+                continue
+            homework = homeworks[0]
+            if homework['status'] != last_hw_status:
+                message = parse_status(homework)
+                send_message(bot, message)
+                last_hw_status = homework['status']
+            else:
+                logging.info("Статус домашего задания не изменился")
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
-            send_message(bot, message)
+            if message != last_err_message:
+                send_message(bot, message)
+                last_err_message = message
         finally:
             time.sleep(RETRY_TIME)
 
@@ -148,10 +158,12 @@ if __name__ == '__main__':
         level=logging.INFO,
         handlers=[
             logging.StreamHandler(stream=sys.stdout),
-            logging.FileHandler(
+            RotatingFileHandler(
                 filename=f'{__file__}.log',
-                mode='w',
-                encoding='utf-8'
+                mode='a',
+                encoding='utf-8',
+                maxBytes=52428800,
+                backupCount=5
             )
         ],
 
